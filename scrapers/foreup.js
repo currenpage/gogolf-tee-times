@@ -11,6 +11,10 @@ function formatDateForForeup(isoDateString) {
   return `${month}-${day}-${year}`;
 }
 
+//
+// Course configurations for ForeUp courses
+//
+
 // Shadowmoss configuration (Tri-County Resident flow)
 const SHADOWMOSS_CONFIG = {
   name: "Shadowmoss Golf Club",
@@ -20,10 +24,25 @@ const SHADOWMOSS_CONFIG = {
   schedule_ids: [8813],
 };
 
+// Charleston National configuration
+const CHARLESTON_NATIONAL_CONFIG = {
+  name: "Charleston National",
+  baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
+  booking_class: 9877,
+  schedule_id: 7624,
+  schedule_ids: [7624],
+};
+
+// Map of all supported courses
+const COURSE_CONFIGS = {
+  shadowmoss: SHADOWMOSS_CONFIG,
+  charleston_national: CHARLESTON_NATIONAL_CONFIG,
+};
+
 /**
- * Build the Shadowmoss tee-times URL.
+ * Build a ForeUp tee-times URL for ANY configured course.
  */
-function buildShadowmossUrl(dateString) {
+function buildForeUpUrl(config, dateString) {
   const formattedDate = formatDateForForeup(dateString);
 
   const params = new URLSearchParams({
@@ -31,18 +50,18 @@ function buildShadowmossUrl(dateString) {
     date: formattedDate,
     holes: "all",
     players: "0",
-    booking_class: String(SHADOWMOSS_CONFIG.booking_class),
-    schedule_id: String(SHADOWMOSS_CONFIG.schedule_id),
+    booking_class: String(config.booking_class),
+    schedule_id: String(config.schedule_id),
     specials_only: "0",
     api_key: "no_limits",
   });
 
-  // Add schedule_ids[] multiple params
-  SHADOWMOSS_CONFIG.schedule_ids.forEach((id) => {
+  // Add schedule_ids[] entries
+  config.schedule_ids.forEach((id) => {
     params.append("schedule_ids[]", String(id));
   });
 
-  return `${SHADOWMOSS_CONFIG.baseUrl}?${params.toString()}`;
+  return `${config.baseUrl}?${params.toString()}`;
 }
 
 /**
@@ -76,30 +95,54 @@ function fetchJson(url) {
 }
 
 /**
- * Normalize a single ForeUp tee time entry.
+ * Normalize a single ForeUp tee time entry into the shape the app expects.
  */
 function normalizeForeupTeeTime(raw, courseSlug, courseName) {
+  // Time usually looks like "2025-11-24 07:32"
+  const time =
+    raw.time || raw.start_time || null;
+
+  // Price: prefer 18-hole green fee, then generic green_fee, then rate
+  let price = null;
+  if (typeof raw.green_fee_18 === "number") {
+    price = raw.green_fee_18;
+  } else if (typeof raw.green_fee === "number") {
+    price = raw.green_fee;
+  } else if (typeof raw.rate === "number") {
+    price = raw.rate;
+  }
+
+  // Available spots: prefer 18-hole, then generic
+  let availableSpots = null;
+  if (typeof raw.available_spots_18 === "number") {
+    availableSpots = raw.available_spots_18;
+  } else if (typeof raw.available_spots === "number") {
+    availableSpots = raw.available_spots;
+  }
+
   return {
     courseSlug,
     courseName,
-    time: raw.time || raw.start_time || null, // e.g. "2025-11-18T13:12:00"
-    price:
-      (typeof raw.green_fee === "number" && raw.green_fee) ||
-      (typeof raw.rate === "number" && raw.rate) ||
-      null,
+    time,
+    price,
+    availableSpots,
     raw, // keep raw for debugging
   };
 }
 
 /**
- * Fetch tee times for Shadowmoss for a given ISO date ("YYYY-MM-DD").
+ * Fetch tee times for a given course slug and ISO date ("YYYY-MM-DD").
  */
-async function fetchShadowmossTeeTimes(dateString) {
-  const url = buildShadowmossUrl(dateString);
+async function fetchForeUpTimesForCourse(slug, dateString) {
+  const config = COURSE_CONFIGS[slug];
+  if (!config) {
+    throw new Error(`Unknown course slug: ${slug}`);
+  }
 
+  const url = buildForeUpUrl(config, dateString);
   const raw = await fetchJson(url);
 
-  // Sometimes ForeUp returns an array directly; sometimes wrapped.
+  // ForeUp usually returns an array, but defensively handle wrappers
   let arr = raw;
   if (!Array.isArray(arr)) {
     if (arr && Array.isArray(arr.times)) {
@@ -110,10 +153,11 @@ async function fetchShadowmossTeeTimes(dateString) {
   }
 
   return arr.map((item) =>
-    normalizeForeupTeeTime(item, "shadowmoss", SHADOWMOSS_CONFIG.name)
+    normalizeForeupTeeTime(item, slug, config.name)
   );
 }
 
 module.exports = {
-  fetchShadowmossTeeTimes,
+  COURSE_CONFIGS,
+  fetchForeUpTimesForCourse,
 };
