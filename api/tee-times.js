@@ -1,4 +1,4 @@
-m// api/tee-times.js
+// api/tee-times.js
 
 const {
   getForeupCourseBySlug,
