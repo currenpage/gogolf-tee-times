@@ -1,91 +1,99 @@
 // scrapers/foreup.js
 
-const https = require("https");
-const { normalizeForeupResponse } = require("../utils/normalize");
-
-// Multi-course ready: start with Shadowmoss, add more later.
-const FOREUP_COURSES = [
-  {
-    slug: "shadowmoss",
-    name: "Shadowmoss Golf Club",
-    locationId: 21766, // from your booking URL
-    serviceId: 8813,   // from your booking URL
-    lat: 32.821,       // optional, approximate coordinates
-    lon: -80.06,
-  },
-  // Add more ForeUp-based courses here later
-];
+const fetch = require("node-fetch");
 
 /**
- * Look up a ForeUp course config by slug.
+ * Format a date string (YYYY-MM-DD) into ForeUp format (MM-DD-YYYY).
+ * Example: 2025-11-18 -> 11-18-2025
  */
-function getForeupCourseBySlug(slug) {
-  return FOREUP_COURSES.find((c) => c.slug === slug) || null;
+function formatDateForForeup(isoDateString) {
+  const [year, month, day] = isoDateString.split("-");
+  return `${month}-${day}-${year}`;
 }
 
-/**
- * Generic helper to GET JSON over HTTPS.
- */
-function fetchJson(url) {
-  return new Promise((resolve, reject) => {
-    https
-      .get(url, (res) => {
-        let data = "";
-
-        res.on("data", (chunk) => {
-          data += chunk;
-        });
-
-        res.on("end", () => {
-          try {
-            const parsed = JSON.parse(data);
-            resolve(parsed);
-          } catch (err) {
-            reject(new Error(`Failed to parse JSON from ForeUp: ${err.message}`));
-          }
-        });
-      })
-      .on("error", (err) => {
-        reject(new Error(`HTTP error calling ForeUp: ${err.message}`));
-      });
-  });
-}
+// Shadowmoss configuration (Tri-County Resident flow)
+const SHADOWMOSS_CONFIG = {
+  name: "Shadowmoss Golf Club",
+  baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
+  booking_class: 11335,
+  schedule_id: 8813,
+  schedule_ids: [8813],
+};
 
 /**
- * Build the ForeUp tee-times URL for a given course + date.
- *
- * NOTE: ForeUp parameter details can vary by installation; if this
- * doesn't return the expected data, you can refine the params
- * by inspecting the Network tab on the Shadowmoss booking page.
+ * Build the Shadowmoss tee-times URL.
  */
-function buildForeupTimesUrl(course, dateString) {
-  // dateString expected as "YYYY-MM-DD"
-  const base = "https://foreupsoftware.com/index.php/api/booking/times";
+function buildShadowmossUrl(dateString) {
+  const formattedDate = formatDateForForeup(dateString);
 
   const params = new URLSearchParams({
     time: "all",
-    date: dateString,
-    holes: "18",
-    booking_class: "online",
-    location_id: String(course.locationId),
-    service_id: String(course.serviceId),
-    api_key: "no_limits", // common ForeUp pattern; can be adjusted
+    date: formattedDate,
+    holes: "all",
+    players: "0",
+    booking_class: SHADOWMOSS_CONFIG.booking_class,
+    schedule_id: SHADOWMOSS_CONFIG.schedule_id,
+    specials_only: "0",
+    api_key: "no_limits",
   });
 
-  return `${base}?${params.toString()}`;
+  // Add schedule_ids[] multiple params
+  SHADOWMOSS_CONFIG.schedule_ids.forEach((id) => {
+    params.append("schedule_ids[]", id);
+  });
+
+  return `${SHADOWMOSS_CONFIG.baseUrl}?${params.toString()}`;
 }
 
 /**
- * Fetch tee times for a ForeUp course on a specific date ("YYYY-MM-DD").
+ * Normalize the ForeUp API raw tee time object into a clean format.
  */
-async function fetchForeupTeeTimesForDate(course, dateString) {
-  const url = buildForeupTimesUrl(course, dateString);
-  const raw = await fetchJson(url);
-  return normalizeForeupResponse(raw, course);
+function normalizeForeupTeeTime(raw, courseSlug, courseName) {
+  return {
+    courseSlug,
+    courseName,
+    time: raw.time,    // format "2025-11-18T13:12:00"
+    price: raw.green_fee || raw.rate || null, // fallback fields
+    raw,               // keep raw object for debugging
+  };
 }
 
+/**
+ * Fetch tee times for Shadowmoss for a given ISO date ("YYYY-MM-DD").
+ */
+async function fetchShadowmossTeeTimes(dateString) {
+  const url = buildShadowmossUrl(dateString);
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`ForeUp request failed: ${res.status} ${res.statusText}`);
+  }
+
+  let data = await res.json();
+
+  // Defensive: If ForeUp wraps response differently
+  if (!Array.isArray(data)) {
+    if (data && Array.isArray(data.times)) {
+      data = data.times;
+    } else {
+      return [];
+    }
+  }
+
+  return data.map((item) =>
+    normalizeForeupTeeTime(item, "shadowmoss", SHADOWMOSS_CONFIG.name)
+  );
+}
+
+/**
+ * Export API the tee-times handler will call.
+ */
 module.exports = {
-  FOREUP_COURSES,
-  getForeupCourseBySlug,
-  fetchForeupTeeTimesForDate,
+  fetchShadowmossTeeTimes,
 };
