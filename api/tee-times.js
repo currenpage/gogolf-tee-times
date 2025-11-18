@@ -1,6 +1,6 @@
 // api/tee-times.js
 
-const { fetchShadowmossTeeTimes } = require("../scrapers/foreup");
+const { COURSE_CONFIGS, fetchForeUpTimesForCourse } = require("../scrapers/foreup");
 
 // In-memory cache (per Vercel instance)
 const CACHE = {};
@@ -36,27 +36,65 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const { course, date } = req.query;
+    const { course: rawCourse, date } = req.query;
 
-    if (!course || !date) {
-      res.status(400).json({ error: "Missing course or date parameter" });
+    if (!date) {
+      res.status(400).json({ error: "Missing date parameter" });
       return;
     }
 
-    if (course !== "shadowmoss") {
-      res.status(400).json({ error: "Only shadowmoss is supported right now." });
+    // Default to shadowmoss if course not provided
+    const course = rawCourse || "shadowmoss";
+
+    const supportedSlugs = Object.keys(COURSE_CONFIGS);
+
+    if (course !== "all" && !supportedSlugs.includes(course)) {
+      res.status(400).json({
+        error: `Unsupported course '${course}'. Supported: ${supportedSlugs.join(
+          ", "
+        )}, or 'all'.`,
+      });
       return;
     }
 
     // Check cache
     let teeTimes = getCached(course, date);
+
     if (!teeTimes) {
-      teeTimes = await fetchShadowmossTeeTimes(date);
+      if (course === "all") {
+        // Fetch from all configured courses in parallel
+        const promises = supportedSlugs.map((slug) =>
+          fetchForeUpTimesForCourse(slug, date)
+        );
+        const results = await Promise.allSettled(promises);
+
+        teeTimes = [];
+        results.forEach((result, idx) => {
+          const slug = supportedSlugs[idx];
+          if (result.status === "fulfilled") {
+            teeTimes = teeTimes.concat(result.value);
+          } else {
+            console.error(
+              `Error fetching tee times for ${slug}:`,
+              result.reason
+            );
+          }
+        });
+      } else {
+        // Single course
+        teeTimes = await fetchForeUpTimesForCourse(course, date);
+      }
+
       storeCached(course, date, teeTimes);
     }
 
+    const courseMeta =
+      course === "all"
+        ? { slug: "all", name: "All courses" }
+        : { slug: course, name: COURSE_CONFIGS[course].name };
+
     res.status(200).json({
-      course: { slug: "shadowmoss", name: "Shadowmoss Golf Club" },
+      course: courseMeta,
       date,
       teeTimes,
     });
