@@ -33,10 +33,20 @@ const CHARLESTON_NATIONAL_CONFIG = {
   schedule_ids: [7624],
 };
 
+// Legend Oaks configuration
+const LEGEND_OAKS_CONFIG = {
+  name: "Legend Oaks",
+  baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
+  booking_class: 50425,
+  schedule_id: 11562,
+  schedule_ids: [11562],
+};
+
 // Map of all supported courses
 const COURSE_CONFIGS = {
   shadowmoss: SHADOWMOSS_CONFIG,
   charleston_national: CHARLESTON_NATIONAL_CONFIG,
+  legend_oaks: LEGEND_OAKS_CONFIG,
 };
 
 /**
