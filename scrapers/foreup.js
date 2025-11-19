@@ -42,11 +42,21 @@ const LEGEND_OAKS_CONFIG = {
   schedule_ids: [11562],
 };
 
+// Stono Ferry configuration
+const STONO_FERRY_CONFIG = {
+  name: "Stono Ferry",
+  baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
+  booking_class: 3511,
+  schedule_id: 3903,
+  schedule_ids: [3903],
+};
+
 // Map of all supported courses
 const COURSE_CONFIGS = {
   shadowmoss: SHADOWMOSS_CONFIG,
   charleston_national: CHARLESTON_NATIONAL_CONFIG,
   legend_oaks: LEGEND_OAKS_CONFIG,
+  stono_ferry: STONO_FERRY_CONFIG,
 };
 
 /**
