@@ -36,8 +36,8 @@ const QUICK18_COURSES = {
     baseUrl: "https://duneswest.quick18.com",
     name: "Dunes West Golf Club",
   },
-   rivertowne: {
-    baseUrl: "https://rivertowne.quick18.com", // adjust if your actual domain differs
+  rivertowne: {
+    baseUrl: "https://rivertowne.quick18.com", // adjust if the actual domain is different
     name: "Rivertowne Country Club",
   },
 };
