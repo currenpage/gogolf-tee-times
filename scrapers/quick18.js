@@ -40,7 +40,8 @@ function parseQuick18TimeCode(code) {
 }
 
 /**
- * Scrape all tee times for a Quick18 course
+ * Scrape tee times for a Quick18 course.
+ * One entry per tee time, using the first rate cell (Public 18-hole).
  */
 async function fetchQuick18TeeTimes(baseUrl, courseSlug, courseName, dateString) {
   const url = buildQuick18Url(baseUrl, dateString);
@@ -49,30 +50,41 @@ async function fetchQuick18TeeTimes(baseUrl, courseSlug, courseName, dateString)
 
   const teeTimes = [];
 
-  $("td.matrixsched").each((_, el) => {
-    const cell = $(el);
+  // Any row that has a rate cell with a "Select" button is a tee-time row.
+  const rows = $("tr").has("td.matrixsched a.sexybutton.teebutton");
+
+  rows.each((_, row) => {
+    const $row = $(row);
+
+    // Take only the first rate cell = Public 18-hole rate
+    const firstRateCell = $row.find("td.matrixsched").first();
+    if (!firstRateCell || firstRateCell.length === 0) {
+      return;
+    }
 
     // Price
-    const priceText = cell.find(".mtrxPrice").text().trim();
+    const priceText = firstRateCell.find(".mtrxPrice").text().trim();
     const numericPrice = priceText.replace(/[^0-9.]/g, "");
     const price = numericPrice ? parseFloat(numericPrice) : null;
 
-    // Tee time (encoded in the select link)
-    const link = cell.find("a.sexybutton.teebutton").attr("href") || "";
+    // Tee time from the encoded code in the link
+    const link = firstRateCell.find("a.sexybutton.teebutton").attr("href") || "";
     const match = link.match(/\/teetime\/(\d{12})/);
     const code = match ? match[1] : null;
     const time = code ? parseQuick18TimeCode(code) : null;
 
-    if (time) {
-      teeTimes.push({
-        courseSlug,
-        courseName,
-        time,
-        price,
-        bookingUrl: `${baseUrl}${link}`,
-        raw: { priceText, link, code },
-      });
+    if (!time) {
+      return;
     }
+
+    teeTimes.push({
+      courseSlug,
+      courseName,
+      time,
+      price,
+      bookingUrl: `${baseUrl}${link}`,
+      raw: { priceText, link, code },
+    });
   });
 
   return teeTimes;
