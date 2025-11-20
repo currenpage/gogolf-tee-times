@@ -13,14 +13,14 @@ function getCacheKey(course, date) {
 
 function getCached(course, date) {
   const key = getCacheKey(course, date);
-  const item = CACHE[key];
-  if (!item) return null;
+  const entry = CACHE[key];
+  if (!entry) return null;
 
-  if (Date.now() - item.timestamp > CACHE_TTL_MS) {
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
     delete CACHE[key];
     return null;
   }
-  return item.value;
+  return entry.value;
 }
 
 function storeCached(course, date, value) {
@@ -29,6 +29,14 @@ function storeCached(course, date, value) {
     value,
   };
 }
+
+// Quick18-backed courses
+const QUICK18_COURSES = {
+  dunes_west: {
+    baseUrl: "https://duneswest.quick18.com",
+    name: "Dunes West Golf Club",
+  },
+};
 
 module.exports = async (req, res) => {
   try {
@@ -66,26 +74,28 @@ module.exports = async (req, res) => {
 
     if (!teeTimes) {
       if (course === "all") {
-        // Fetch from all ForeUp + all Quick18 courses in parallel
+        // Fetch all ForeUp + all Quick18 courses in parallel
         const foreupPromises = foreupSlugs.map((slug) =>
           fetchForeUpTimesForCourse(slug, date)
         );
-
         const quick18Promises = quick18Slugs.map((slug) => {
           const cfg = QUICK18_COURSES[slug];
           return fetchQuick18TeeTimes(cfg.baseUrl, slug, cfg.name, date);
         });
 
+        const allSlugs = [...foreupSlugs, ...quick18Slugs];
         const allPromises = [...foreupPromises, ...quick18Promises];
+
         const results = await Promise.allSettled(allPromises);
 
         teeTimes = [];
         results.forEach((result, idx) => {
+          const slug = allSlugs[idx];
           if (result.status === "fulfilled") {
             teeTimes = teeTimes.concat(result.value);
           } else {
             console.error(
-              `Error fetching tee times for course index ${idx}:`,
+              `Error fetching tee times for ${slug}:`,
               result.reason
             );
           }
@@ -94,7 +104,7 @@ module.exports = async (req, res) => {
         // Single ForeUp course
         teeTimes = await fetchForeUpTimesForCourse(course, date);
       } else if (quick18Slugs.includes(course)) {
-        // Single Quick18 course, e.g. dunes_west
+        // Single Quick18 course
         const cfg = QUICK18_COURSES[course];
         teeTimes = await fetchQuick18TeeTimes(
           cfg.baseUrl,
@@ -102,6 +112,8 @@ module.exports = async (req, res) => {
           cfg.name,
           date
         );
+      } else {
+        teeTimes = [];
       }
 
       storeCached(course, date, teeTimes);
@@ -116,7 +128,6 @@ module.exports = async (req, res) => {
     } else if (quick18Slugs.includes(course)) {
       courseMeta = { slug: course, name: QUICK18_COURSES[course].name };
     } else {
-      // Fallback, shouldn't hit because of earlier validation
       courseMeta = { slug: course, name: course };
     }
 
