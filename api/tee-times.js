@@ -1,7 +1,13 @@
 // api/tee-times.js
 
-const { COURSE_CONFIGS, fetchForeUpTimesForCourse } = require("../scrapers/foreup");
+const {
+  COURSE_CONFIGS,
+  fetchForeUpTimesForCourse,
+} = require("../scrapers/foreup");
 const { fetchQuick18TeeTimes } = require("../scrapers/quick18");
+const {
+  fetchTeeItUpTeeTimesForSantee,
+} = require("../scrapers/teeitup");
 
 // In-memory cache (per Vercel instance)
 const CACHE = {};
@@ -37,10 +43,13 @@ const QUICK18_COURSES = {
     name: "Dunes West Golf Club",
   },
   rivertowne: {
-    baseUrl: "https://rivertowne.quick18.com", // adjust if the actual domain is different
+    baseUrl: "https://rivertowne.quick18.com",
     name: "Rivertowne Country Club",
   },
 };
+
+// TeeitUp-backed courses (for now only Santee National)
+const TEEITUP_SLUGS = ["santee_national"];
 
 module.exports = async (req, res) => {
   try {
@@ -59,10 +68,10 @@ module.exports = async (req, res) => {
     // Default to shadowmoss if course not provided
     const course = rawCourse || "shadowmoss";
 
-    // ForeUp + Quick18 supported slugs
+    // ForeUp + Quick18 + TeeitUp supported slugs
     const foreupSlugs = Object.keys(COURSE_CONFIGS);
     const quick18Slugs = Object.keys(QUICK18_COURSES);
-    const supportedSlugs = [...foreupSlugs, ...quick18Slugs];
+    const supportedSlugs = [...foreupSlugs, ...quick18Slugs, ...TEEITUP_SLUGS];
 
     if (course !== "all" && !supportedSlugs.includes(course)) {
       res.status(400).json({
@@ -78,7 +87,7 @@ module.exports = async (req, res) => {
 
     if (!teeTimes) {
       if (course === "all") {
-        // Fetch all ForeUp + all Quick18 courses in parallel
+        // Fetch all ForeUp + all Quick18 + all TeeitUp courses in parallel
         const foreupPromises = foreupSlugs.map((slug) =>
           fetchForeUpTimesForCourse(slug, date)
         );
@@ -86,9 +95,20 @@ module.exports = async (req, res) => {
           const cfg = QUICK18_COURSES[slug];
           return fetchQuick18TeeTimes(cfg.baseUrl, slug, cfg.name, date);
         });
+        const teeitupPromises = TEEITUP_SLUGS.map(() =>
+          fetchTeeItUpTeeTimesForSantee(date)
+        );
 
-        const allSlugs = [...foreupSlugs, ...quick18Slugs];
-        const allPromises = [...foreupPromises, ...quick18Promises];
+        const allSlugs = [
+          ...foreupSlugs,
+          ...quick18Slugs,
+          ...TEEITUP_SLUGS,
+        ];
+        const allPromises = [
+          ...foreupPromises,
+          ...quick18Promises,
+          ...teeitupPromises,
+        ];
 
         const results = await Promise.allSettled(allPromises);
 
@@ -116,6 +136,9 @@ module.exports = async (req, res) => {
           cfg.name,
           date
         );
+      } else if (course === "santee_national") {
+        // Single TeeitUp course (hard-coded Santee for now)
+        teeTimes = await fetchTeeItUpTeeTimesForSantee(date);
       } else {
         teeTimes = [];
       }
@@ -131,6 +154,11 @@ module.exports = async (req, res) => {
       courseMeta = { slug: course, name: COURSE_CONFIGS[course].name };
     } else if (quick18Slugs.includes(course)) {
       courseMeta = { slug: course, name: QUICK18_COURSES[course].name };
+    } else if (course === "santee_national") {
+      courseMeta = {
+        slug: "santee_national",
+        name: "Santee National Golf Club",
+      };
     } else {
       courseMeta = { slug: course, name: course };
     }
