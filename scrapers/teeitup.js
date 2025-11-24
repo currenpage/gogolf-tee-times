@@ -1,5 +1,4 @@
 // scrapers/teeitup.js
-
 const https = require("https");
 
 /**
@@ -64,62 +63,25 @@ function buildTeeItUpUrl(facilityId, dateString) {
 }
 
 /**
- * Common normalizer for TeeitUp tee time objects.
- * Takes raw "flattened" tt and maps to our shared tee time shape.
+ * Generic TeeitUp fetcher for any course, parameterized by facility + alias + slug/name.
  */
-function normalizeTeeItUpTeeTime(tt, courseSlug, courseName, bookingUrlOverride = null) {
-  const primaryRate =
-    Array.isArray(tt.rates) && tt.rates.length > 0 ? tt.rates[0] : null;
+async function fetchTeeItUpTeeTimesForCourse(dateString, courseConfig) {
+  const { facilityId, alias, courseSlug, courseName } = courseConfig;
 
-  let price = null;
-  if (primaryRate) {
-    // TeeitUp uses cents for greenFeeCart, e.g. 5900 → $59.00
-    if (typeof primaryRate.greenFeeCart === "number") {
-      price = primaryRate.greenFeeCart / 100;
-    } else if (typeof primaryRate.greenFee === "number") {
-      price = primaryRate.greenFee / 100;
-    } else if (typeof primaryRate.amount === "number") {
-      price = primaryRate.amount;
-    } else if (typeof primaryRate.price === "number") {
-      price = primaryRate.price;
-    } else if (
-      primaryRate.price &&
-      typeof primaryRate.price.amount === "number"
-    ) {
-      price = primaryRate.price.amount;
-    }
-  }
+  const url = buildTeeItUpUrl(facilityId, dateString);
+  const json = await fetchJson(url, alias);
 
-  const maxPlayers = tt.maxPlayers ?? null;
-  const bookedPlayers = tt.bookedPlayers ?? 0;
-  const availableSpots =
-    maxPlayers != null ? Math.max(maxPlayers - bookedPlayers, 0) : null;
-
-  return {
-    courseSlug,
-    courseName,
-    time: tt.teetime, // ISO string from TeeitUp, e.g. "2025-11-20T19:00:00.000Z"
-    price,
-    availableSpots,
-    minPlayers: tt.minPlayers ?? null,
-    maxPlayers,
-    bookingUrl: bookingUrlOverride,
-    raw: tt,
-  };
-}
-
-/**
- * Flatten TeeitUp "day blocks" into a plain array of tee time objects.
- */
-function flattenTeeItUpResponse(json) {
+  // TeeitUp response: array of "day blocks", each with a `teetimes` array.
   if (!Array.isArray(json)) {
     return [];
   }
 
+  // Flatten all teetimes across all day blocks.
   const flattened = [];
   for (const dayBlock of json) {
     if (Array.isArray(dayBlock.teetimes)) {
       for (const t of dayBlock.teetimes) {
+        // Merge dayInfo into each tee time object.
         flattened.push({
           dayInfo: dayBlock.dayInfo,
           ...t,
@@ -127,55 +89,77 @@ function flattenTeeItUpResponse(json) {
       }
     }
   }
-  return flattened;
+
+  if (flattened.length === 0) {
+    return [];
+  }
+
+  return flattened.map((tt) => {
+    // Take the first rate as the "primary" price.
+    const primaryRate =
+      Array.isArray(tt.rates) && tt.rates.length > 0 ? tt.rates[0] : null;
+
+    let price = null;
+    if (primaryRate) {
+      // TeeitUp uses cents for greenFeeCart, e.g. 5900 → $59.00
+      if (typeof primaryRate.greenFeeCart === "number") {
+        price = primaryRate.greenFeeCart / 100;
+      } else if (typeof primaryRate.greenFee === "number") {
+        price = primaryRate.greenFee / 100;
+      } else if (typeof primaryRate.amount === "number") {
+        price = primaryRate.amount;
+      } else if (typeof primaryRate.price === "number") {
+        price = primaryRate.price;
+      } else if (
+        primaryRate.price &&
+        typeof primaryRate.price.amount === "number"
+      ) {
+        price = primaryRate.price.amount;
+      }
+    }
+
+    const maxPlayers = tt.maxPlayers ?? null;
+    const bookedPlayers = tt.bookedPlayers ?? 0;
+    const availableSpots =
+      maxPlayers != null ? Math.max(maxPlayers - bookedPlayers, 0) : null;
+
+    return {
+      courseSlug,
+      courseName,
+      time: tt.teetime, // ISO string, e.g. "2025-11-22T12:10:00.000Z"
+      price,
+      availableSpots,
+      minPlayers: tt.minPlayers ?? null,
+      maxPlayers,
+      bookingUrl: null, // can be filled in later if we reverse-engineer their booking URL
+      raw: tt, // full tee-time object (with dayInfo merged in) for debugging
+    };
+  });
 }
 
 /**
- * Fetch tee times for Santee National for a given ISO date "YYYY-MM-DD".
- * Normalized to the same shape as our other scrapers.
+ * Santee National wrapper.
  */
 async function fetchTeeItUpTeeTimesForSantee(dateString) {
-  const facilityId = 5578;
-  const alias = "santee-national-golf-club";
-
-  const url = buildTeeItUpUrl(facilityId, dateString);
-  const json = await fetchJson(url, alias);
-
-  const flattened = flattenTeeItUpResponse(json);
-
-  return flattened.map((tt) =>
-    normalizeTeeItUpTeeTime(
-      tt,
-      "santee_national",
-      "Santee National Golf Club",
-      null // no direct booking URL yet
-    )
-  );
+  return fetchTeeItUpTeeTimesForCourse(dateString, {
+    facilityId: 5578,
+    alias: "santee-national-golf-club",
+    courseSlug: "santee_national",
+    courseName: "Santee National Golf Club",
+  });
 }
 
 /**
- * Fetch tee times for Stillwater Golf and Country Club for a given date.
- * NOTE: you must plug in the correct facilityId and alias from DevTools.
+ * Stillwater Golf & Country Club wrapper.
+ * facilityId + alias based on what you discovered.
  */
 async function fetchTeeItUpTeeTimesForStillwater(dateString) {
-  // TODO: Replace with the real facilityIds value from the kenna.io request
-  const facilityId = 17933; // placeholder – use actual facilityIds= value
-  // TODO: Replace with the real x-be-alias header value
-  const alias = "stillwater-golf-and-country-club"; // placeholder
-
-  const url = buildTeeItUpUrl(facilityId, dateString);
-  const json = await fetchJson(url, alias);
-
-  const flattened = flattenTeeItUpResponse(json);
-
-  return flattened.map((tt) =>
-    normalizeTeeItUpTeeTime(
-      tt,
-      "stillwater",
-      "Stillwater Golf and Country Club",
-      "https://www.stillwatergcc.com/golf/teetime"
-    )
-  );
+  return fetchTeeItUpTeeTimesForCourse(dateString, {
+    facilityId: 17933,
+    alias: "stillwater-golf-and-country-club",
+    courseSlug: "stillwater",
+    courseName: "Stillwater Golf and Country Club",
+  });
 }
 
 module.exports = {

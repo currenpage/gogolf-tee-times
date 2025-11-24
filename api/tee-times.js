@@ -39,7 +39,7 @@ function storeCached(course, date, value) {
 
 /*
   Quick18-backed courses.
-  NOTE: Dunes West is now handled via ForeUp (in COURSE_CONFIGS),
+  NOTE: Dunes West is handled via ForeUp (in COURSE_CONFIGS),
   so we only keep Rivertowne here.
 */
 const QUICK18_COURSES = {
@@ -103,21 +103,16 @@ module.exports = async (req, res) => {
           return fetchQuick18TeeTimes(cfg.baseUrl, slug, cfg.name, date);
         });
 
-        const teeitupPromises = TEEITUP_SLUGS.map((slug) => {
-          if (slug === "santee_national") {
-            return fetchTeeItUpTeeTimesForSantee(date);
-          }
-          if (slug === "stillwater") {
-            return fetchTeeItUpTeeTimesForStillwater(date);
-          }
-          // Fallback so Promise.allSettled indices stay aligned
-          return Promise.resolve([]);
-        });
+        const teeitupPromises = [
+          fetchTeeItUpTeeTimesForSantee(date),
+          fetchTeeItUpTeeTimesForStillwater(date),
+        ];
 
         const allSlugs = [
           ...foreupSlugs,
           ...quick18Slugs,
-          ...TEEITUP_SLUGS,
+          "santee_national",
+          "stillwater",
         ];
         const allPromises = [
           ...foreupPromises,
@@ -152,10 +147,8 @@ module.exports = async (req, res) => {
           date
         );
       } else if (course === "santee_national") {
-        // Single TeeitUp – Santee
         teeTimes = await fetchTeeItUpTeeTimesForSantee(date);
       } else if (course === "stillwater") {
-        // Single TeeitUp – Stillwater
         teeTimes = await fetchTeeItUpTeeTimesForStillwater(date);
       } else {
         teeTimes = [];
