@@ -3,20 +3,26 @@
 const https = require("https");
 
 /**
- * Format a date string (YYYY-MM-DD) into ForeUp format (MM-DD-YYYY).
- * Example: 2025-11-18 -> 11-18-2025
+ * Format a date string (YYYY-MM-DD) into ForeUp format (MM-DD-YYYY)
  */
 function formatDateForForeup(isoDateString) {
   const [year, month, day] = isoDateString.split("-");
   return `${month}-${day}-${year}`;
 }
 
-//
-// Course configurations for ForeUp courses
-//
+/*
+|--------------------------------------------------------------------------
+|  FOREUP COURSE CONFIGS
+|--------------------------------------------------------------------------
+|  Only include ForeUp-based courses here.
+|  Quick18 + TeeitUp belong in their own scraper files.
+|--------------------------------------------------------------------------
+*/
 
-// Shadowmoss configuration (Tri-County Resident flow)
+// Shadowmoss configuration
 const SHADOWMOSS_CONFIG = {
+  slug: "shadowmoss",
+  type: "foreup",
   name: "Shadowmoss Golf Club",
   baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
   booking_class: 11335,
@@ -24,8 +30,10 @@ const SHADOWMOSS_CONFIG = {
   schedule_ids: [8813],
 };
 
-// Charleston National configuration
+// Charleston National
 const CHARLESTON_NATIONAL_CONFIG = {
+  slug: "charleston_national",
+  type: "foreup",
   name: "Charleston National",
   baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
   booking_class: 9877,
@@ -33,8 +41,10 @@ const CHARLESTON_NATIONAL_CONFIG = {
   schedule_ids: [7624],
 };
 
-// Legend Oaks configuration
+// Legend Oaks
 const LEGEND_OAKS_CONFIG = {
+  slug: "legend_oaks",
+  type: "foreup",
   name: "Legend Oaks",
   baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
   booking_class: 50425,
@@ -42,8 +52,10 @@ const LEGEND_OAKS_CONFIG = {
   schedule_ids: [11562],
 };
 
-// Stono Ferry configuration
+// Stono Ferry
 const STONO_FERRY_CONFIG = {
+  slug: "stono_ferry",
+  type: "foreup",
   name: "Stono Ferry",
   baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
   booking_class: 3511,
@@ -51,17 +63,57 @@ const STONO_FERRY_CONFIG = {
   schedule_ids: [3903],
 };
 
-// Map of all supported courses
+// Dunes West (ForeUp)
+const DUNES_WEST_CONFIG = {
+  slug: "dunes_west",
+  type: "foreup",
+  name: "Dunes West Golf Club",
+  baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
+  booking_class: 1953,
+  schedule_id: 1953,
+  schedule_ids: [1953],
+};
+
+// Jax Beach Golf Club
+const JAX_BEACH_CONFIG = {
+  slug: "jax_beach",
+  type: "foreup",
+  name: "Jax Beach Golf Club",
+  baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
+  booking_class: 10426,
+  schedule_id: 2912,
+  schedule_ids: [2912],
+};
+
+// Rivertowne (Quick18 – NOT ForeUp, but we include metadata here)
+const RIVERTOWNE_CONFIG = {
+  slug: "rivertowne",
+  type: "quick18",
+  name: "Rivertowne Country Club",
+  baseUrl: "https://rivertowne.quick18.com",
+};
+
+/*
+|--------------------------------------------------------------------------
+| MASTER EXPORT: Course metadata only
+|--------------------------------------------------------------------------
+*/
 const COURSE_CONFIGS = {
   shadowmoss: SHADOWMOSS_CONFIG,
   charleston_national: CHARLESTON_NATIONAL_CONFIG,
   legend_oaks: LEGEND_OAKS_CONFIG,
   stono_ferry: STONO_FERRY_CONFIG,
+  dunes_west: DUNES_WEST_CONFIG,
+  jax_beach: JAX_BEACH_CONFIG,
+  rivertowne: RIVERTOWNE_CONFIG,
 };
 
-/**
- * Build a ForeUp tee-times URL for ANY configured course.
- */
+/*
+|--------------------------------------------------------------------------
+| FOREUP SCRAPER IMPLEMENTATION
+|--------------------------------------------------------------------------
+*/
+
 function buildForeUpUrl(config, dateString) {
   const formattedDate = formatDateForForeup(dateString);
 
@@ -76,31 +128,23 @@ function buildForeUpUrl(config, dateString) {
     api_key: "no_limits",
   });
 
-  // Add schedule_ids[] entries
-  config.schedule_ids.forEach((id) => {
-    params.append("schedule_ids[]", String(id));
-  });
+  config.schedule_ids.forEach((id) =>
+    params.append("schedule_ids[]", String(id))
+  );
 
   return `${config.baseUrl}?${params.toString()}`;
 }
 
-/**
- * Low-level helper to GET JSON over HTTPS.
- */
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
     https
       .get(url, (res) => {
         let data = "";
 
-        res.on("data", (chunk) => {
-          data += chunk;
-        });
-
+        res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
           try {
-            const parsed = JSON.parse(data);
-            resolve(parsed);
+            resolve(JSON.parse(data));
           } catch (err) {
             reject(
               new Error(`Failed to parse JSON from ForeUp: ${err.message}`)
@@ -114,31 +158,19 @@ function fetchJson(url) {
   });
 }
 
-/**
- * Normalize a single ForeUp tee time entry into the shape the app expects.
- */
 function normalizeForeupTeeTime(raw, courseSlug, courseName) {
-  // Time usually looks like "2025-11-24 07:32"
-  const time =
-    raw.time || raw.start_time || null;
+  const time = raw.time || raw.start_time || null;
 
-  // Price: prefer 18-hole green fee, then generic green_fee, then rate
   let price = null;
-  if (typeof raw.green_fee_18 === "number") {
-    price = raw.green_fee_18;
-  } else if (typeof raw.green_fee === "number") {
-    price = raw.green_fee;
-  } else if (typeof raw.rate === "number") {
-    price = raw.rate;
-  }
+  if (typeof raw.green_fee_18 === "number") price = raw.green_fee_18;
+  else if (typeof raw.green_fee === "number") price = raw.green_fee;
+  else if (typeof raw.rate === "number") price = raw.rate;
 
-  // Available spots: prefer 18-hole, then generic
   let availableSpots = null;
-  if (typeof raw.available_spots_18 === "number") {
+  if (typeof raw.available_spots_18 === "number")
     availableSpots = raw.available_spots_18;
-  } else if (typeof raw.available_spots === "number") {
+  else if (typeof raw.available_spots === "number")
     availableSpots = raw.available_spots;
-  }
 
   return {
     courseSlug,
@@ -146,30 +178,24 @@ function normalizeForeupTeeTime(raw, courseSlug, courseName) {
     time,
     price,
     availableSpots,
-    raw, // keep raw for debugging
+    raw,
   };
 }
 
-/**
- * Fetch tee times for a given course slug and ISO date ("YYYY-MM-DD").
- */
 async function fetchForeUpTimesForCourse(slug, dateString) {
   const config = COURSE_CONFIGS[slug];
-  if (!config) {
-    throw new Error(`Unknown course slug: ${slug}`);
+
+  if (!config || config.type !== "foreup") {
+    throw new Error(`Requested non-ForeUp course in ForeUp scraper: ${slug}`);
   }
 
   const url = buildForeUpUrl(config, dateString);
   const raw = await fetchJson(url);
 
-  // ForeUp usually returns an array, but defensively handle wrappers
   let arr = raw;
   if (!Array.isArray(arr)) {
-    if (arr && Array.isArray(arr.times)) {
-      arr = arr.times;
-    } else {
-      return [];
-    }
+    if (arr && Array.isArray(arr.times)) arr = arr.times;
+    else return [];
   }
 
   return arr.map((item) =>
