@@ -9,6 +9,7 @@ const {
   fetchTeeItUpTeeTimesForSantee,
   fetchTeeItUpTeeTimesForStillwater,
 } = require("../scrapers/teeitup");
+const { fetchGolfBackTeeTimes } = require("../scrapers/golfback");
 
 // In-memory cache (per Vercel instance)
 const CACHE = {};
@@ -52,6 +53,9 @@ const QUICK18_COURSES = {
 // TeeitUp-backed courses
 const TEEITUP_SLUGS = ["santee_national", "stillwater"];
 
+// GolfBack-backed courses
+const GOLFBACK_SLUGS = ["windsor_parke"];
+
 module.exports = async (req, res) => {
   try {
     if (req.method !== "GET") {
@@ -77,7 +81,12 @@ module.exports = async (req, res) => {
     // Quick18 slugs = from QUICK18_COURSES map
     const quick18Slugs = Object.keys(QUICK18_COURSES);
 
-    const supportedSlugs = [...foreupSlugs, ...quick18Slugs, ...TEEITUP_SLUGS];
+    const supportedSlugs = [
+      ...foreupSlugs,
+      ...quick18Slugs,
+      ...TEEITUP_SLUGS,
+      ...GOLFBACK_SLUGS,
+    ];
 
     if (course !== "all" && !supportedSlugs.includes(course)) {
       res.status(400).json({
@@ -93,7 +102,7 @@ module.exports = async (req, res) => {
 
     if (!teeTimes) {
       if (course === "all") {
-        // Fetch all ForeUp + all Quick18 + all TeeitUp courses in parallel
+        // Fetch all ForeUp + all Quick18 + all TeeitUp + all GolfBack courses in parallel
         const foreupPromises = foreupSlugs.map((slug) =>
           fetchForeUpTimesForCourse(slug, date)
         );
@@ -103,21 +112,39 @@ module.exports = async (req, res) => {
           return fetchQuick18TeeTimes(cfg.baseUrl, slug, cfg.name, date);
         });
 
-        const teeitupPromises = [
-          fetchTeeItUpTeeTimesForSantee(date),
-          fetchTeeItUpTeeTimesForStillwater(date),
-        ];
+        const teeitupPromises = TEEITUP_SLUGS.map((slug) => {
+          if (slug === "santee_national") {
+            return fetchTeeItUpTeeTimesForSantee(date);
+          }
+          if (slug === "stillwater") {
+            return fetchTeeItUpTeeTimesForStillwater(date);
+          }
+          return Promise.resolve([]);
+        });
+
+        const golfbackPromises = GOLFBACK_SLUGS.map((slug) => {
+          if (slug === "windsor_parke") {
+            return fetchGolfBackTeeTimes(
+              "5a90fb0c-b928-43f0-9486-d5d43c03d25d", // courseId
+              "windsor_parke",
+              "Windsor Parke Golf Club",
+              date
+            );
+          }
+          return Promise.resolve([]);
+        });
 
         const allSlugs = [
           ...foreupSlugs,
           ...quick18Slugs,
-          "santee_national",
-          "stillwater",
+          ...TEEITUP_SLUGS,
+          ...GOLFBACK_SLUGS,
         ];
         const allPromises = [
           ...foreupPromises,
           ...quick18Promises,
           ...teeitupPromises,
+          ...golfbackPromises,
         ];
 
         const results = await Promise.allSettled(allPromises);
@@ -150,6 +177,14 @@ module.exports = async (req, res) => {
         teeTimes = await fetchTeeItUpTeeTimesForSantee(date);
       } else if (course === "stillwater") {
         teeTimes = await fetchTeeItUpTeeTimesForStillwater(date);
+      } else if (course === "windsor_parke") {
+        // Single GolfBack course
+        teeTimes = await fetchGolfBackTeeTimes(
+          "5a90fb0c-b928-43f0-9486-d5d43c03d25d", // courseId
+          "windsor_parke", // slug
+          "Windsor Parke Golf Club", // name
+          date
+        );
       } else {
         teeTimes = [];
       }
@@ -174,6 +209,11 @@ module.exports = async (req, res) => {
       courseMeta = {
         slug: "stillwater",
         name: "Stillwater Golf and Country Club",
+      };
+    } else if (course === "windsor_parke") {
+      courseMeta = {
+        slug: "windsor_parke",
+        name: "Windsor Parke Golf Club",
       };
     } else {
       courseMeta = { slug: course, name: course };
