@@ -8,6 +8,8 @@ const { fetchQuick18TeeTimes } = require("../scrapers/quick18");
 const {
   fetchTeeItUpTeeTimesForSantee,
   fetchTeeItUpTeeTimesForStillwater,
+  fetchTeeItUpTeeTimesForHiddenHills,
+  fetchTeeItUpTeeTimesForBlueCypress,
 } = require("../scrapers/teeitup");
 const { fetchGolfBackTeeTimes } = require("../scrapers/golfback");
 
@@ -40,21 +42,24 @@ function storeCached(course, date, value) {
 
 /*
   Quick18-backed courses.
-  NOTE: Dunes West is handled via ForeUp (in COURSE_CONFIGS),
-  so we only keep Rivertowne here.
+  Dunes West and Rivertowne both use Quick18.
 */
 const QUICK18_COURSES = {
   rivertowne: {
     baseUrl: "https://rivertowne.quick18.com",
     name: "Rivertowne Country Club",
   },
+  dunes_west: {
+    baseUrl: "https://duneswest.quick18.com",
+    name: "Dunes West Golf Club",
+  },
 };
 
 // TeeitUp-backed courses
-const TEEITUP_SLUGS = ["santee_national", "stillwater"];
+const TEEITUP_SLUGS = ["santee_national", "stillwater", "hidden_hills", "blue_cypress"];
 
 // GolfBack-backed courses
-const GOLFBACK_SLUGS = ["windsor_parke"];
+const GOLFBACK_SLUGS = ["windsor_parke", "julington_creek"];
 
 module.exports = async (req, res) => {
   try {
@@ -119,15 +124,29 @@ module.exports = async (req, res) => {
           if (slug === "stillwater") {
             return fetchTeeItUpTeeTimesForStillwater(date);
           }
+          if (slug === "hidden_hills") {
+            return fetchTeeItUpTeeTimesForHiddenHills(date);
+          }
+          if (slug === "blue_cypress") {
+            return fetchTeeItUpTeeTimesForBlueCypress(date);
+          }
           return Promise.resolve([]);
         });
 
         const golfbackPromises = GOLFBACK_SLUGS.map((slug) => {
           if (slug === "windsor_parke") {
             return fetchGolfBackTeeTimes(
-              "5a90fb0c-b928-43f0-9486-d5d43c03d25d", // courseId
+              "5a90fb0c-b928-43f0-9486-d5d43c03d25d",
               "windsor_parke",
               "Windsor Parke Golf Club",
+              date
+            );
+          }
+          if (slug === "julington_creek") {
+            return fetchGolfBackTeeTimes(
+              "e52fc334-4363-4d53-8b13-3b2e60c49087", // Julington Creek courseId
+              "julington_creek",
+              "Julington Creek Golf Club",
               date
             );
           }
@@ -162,10 +181,8 @@ module.exports = async (req, res) => {
           }
         });
       } else if (foreupSlugs.includes(course)) {
-        // Single ForeUp course
         teeTimes = await fetchForeUpTimesForCourse(course, date);
       } else if (quick18Slugs.includes(course)) {
-        // Single Quick18 course
         const cfg = QUICK18_COURSES[course];
         teeTimes = await fetchQuick18TeeTimes(
           cfg.baseUrl,
@@ -177,12 +194,22 @@ module.exports = async (req, res) => {
         teeTimes = await fetchTeeItUpTeeTimesForSantee(date);
       } else if (course === "stillwater") {
         teeTimes = await fetchTeeItUpTeeTimesForStillwater(date);
+      } else if (course === "hidden_hills") {
+        teeTimes = await fetchTeeItUpTeeTimesForHiddenHills(date);
+      } else if (course === "blue_cypress"){
+        teeTimes = await fetchTeeItUpTeeTimesForBlueCypress(date);
       } else if (course === "windsor_parke") {
-        // Single GolfBack course
         teeTimes = await fetchGolfBackTeeTimes(
-          "5a90fb0c-b928-43f0-9486-d5d43c03d25d", // courseId
-          "windsor_parke", // slug
-          "Windsor Parke Golf Club", // name
+          "5a90fb0c-b928-43f0-9486-d5d43c03d25d",
+          "windsor_parke",
+          "Windsor Parke Golf Club",
+          date
+        );
+      } else if (course === "julington_creek") {
+        teeTimes = await fetchGolfBackTeeTimes(
+          "e52fc334-4363-4d53-8b13-3b2e60c49087",
+          "julington_creek",
+          "Julington Creek Golf Club",
           date
         );
       } else {
@@ -209,6 +236,21 @@ module.exports = async (req, res) => {
       courseMeta = {
         slug: "stillwater",
         name: "Stillwater Golf and Country Club",
+      };
+    } else if (course === "hidden_hills") {
+      courseMeta = {
+        slug: "hidden_hills",
+        name: "Hidden Hills Golf Club",
+      };  
+    } else if (course === "blue_cypress") {
+      courseMeta = {
+        slug: "blue_cypress",
+        name: "Blue Cypress Golf Club",
+      };
+    } else if (course === "julington_creek") {
+      courseMeta = {
+        slug: "julington_creek",
+        name: "Julington Creek Golf Club",
       };
     } else if (course === "windsor_parke") {
       courseMeta = {

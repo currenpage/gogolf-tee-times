@@ -5,6 +5,11 @@ const https = require("https");
  * Low-level POST helper for GolfBack.
  * You MUST fill in the correct headers/body from a real “Copy as cURL”
  * if the default empty ones do not work.
+ *
+ * courseId:    GolfBack UUID for the course
+ * dateString:  "YYYY-MM-DD"
+ * requestBody: object to POST as JSON
+ * extraHeaders: any additional headers (Authorization, Origin, Referer, etc.)
  */
 function postGolfBackJson(courseId, dateString, requestBody, extraHeaders = {}) {
   const options = {
@@ -14,7 +19,7 @@ function postGolfBackJson(courseId, dateString, requestBody, extraHeaders = {}) 
     method: "POST",
     headers: {
       "User-Agent": "GoGolf TeeTimes Dev",
-      "Accept": "application/json, text/plain, */*",
+      Accept: "application/json, text/plain, */*",
       "Content-Type": "application/json",
       // Add any real headers (Authorization, Origin, Referer, etc.) here:
       ...extraHeaders,
@@ -67,15 +72,29 @@ function postGolfBackJson(courseId, dateString, requestBody, extraHeaders = {}) 
 }
 
 /**
- * Normalize GolfBack response objects into your shared tee time shape.
- * This is intentionally defensive because we haven’t inspected real JSON yet.
+ * Normalize GolfBack response objects into the shared tee time shape.
+ *
+ * Canonical output per tee time:
+ * {
+ *   courseSlug,
+ *   courseName,
+ *   time,            // ISO string if available, or provider format
+ *   price,           // number or null
+ *   availableSpots,  // number or null
+ *   minPlayers,      // number or null
+ *   maxPlayers,      // number or null
+ *   bookingUrl,      // string or null
+ *   raw,             // original GolfBack tee time object
+ * }
  */
 function normalizeGolfBackTeeTimes(rawArray, slug, courseName) {
   if (!Array.isArray(rawArray)) return [];
 
   return rawArray.map((tt) => {
-    // Try several likely keys for the time field
+    // Time: prefer ISO-like fields, fall back to anything reasonable
     const time =
+      tt.dateTime ||
+      tt.localDateTime ||
       tt.startTime ||
       tt.start_time ||
       tt.teeTime ||
@@ -83,18 +102,57 @@ function normalizeGolfBackTeeTimes(rawArray, slug, courseName) {
       tt.time ||
       null;
 
-    // Try several likely keys for price
+    // Price:
+    // GolfBack tends to expose a primaryPrices array, sometimes in cents.
     let price = null;
-    if (typeof tt.greenFee === "number") {
-      price = tt.greenFee;
-    } else if (typeof tt.greenFeeCents === "number") {
-      price = tt.greenFeeCents / 100;
-    } else if (tt.rate && typeof tt.rate.amount === "number") {
-      price = tt.rate.amount;
-    } else if (typeof tt.price === "number") {
-      price = tt.price;
+
+    if (Array.isArray(tt.primaryPrices) && tt.primaryPrices.length > 0) {
+      // Prefer 18-hole rate if present
+      let chosenRate =
+        tt.primaryPrices.find(
+          (r) =>
+            r.holes === 18 ||
+            (typeof r.name === "string" &&
+              r.name.toLowerCase().includes("18"))
+        ) || tt.primaryPrices[0];
+
+      if (chosenRate) {
+        if (typeof chosenRate.greenFeeCart === "number") {
+          // dollars
+          price = chosenRate.greenFeeCart;
+        } else if (typeof chosenRate.greenFeeCartCents === "number") {
+          price = chosenRate.greenFeeCartCents / 100;
+        } else if (typeof chosenRate.greenFee === "number") {
+          price = chosenRate.greenFee;
+        } else if (typeof chosenRate.greenFeeCents === "number") {
+          price = chosenRate.greenFeeCents / 100;
+        } else if (typeof chosenRate.amount === "number") {
+          price = chosenRate.amount;
+        } else if (typeof chosenRate.price === "number") {
+          price = chosenRate.price;
+        } else if (
+          chosenRate.price &&
+          typeof chosenRate.price.amount === "number"
+        ) {
+          price = chosenRate.price.amount;
+        }
+      }
     }
 
+    // Fallbacks to generic keys if the above didn't find anything
+    if (price == null) {
+      if (typeof tt.greenFee === "number") {
+        price = tt.greenFee;
+      } else if (typeof tt.greenFeeCents === "number") {
+        price = tt.greenFeeCents / 100;
+      } else if (tt.rate && typeof tt.rate.amount === "number") {
+        price = tt.rate.amount;
+      } else if (typeof tt.price === "number") {
+        price = tt.price;
+      }
+    }
+
+    // Player counts
     const maxPlayers =
       tt.maxPlayers ??
       tt.max_players ??
@@ -137,10 +195,10 @@ function normalizeGolfBackTeeTimes(rawArray, slug, courseName) {
 /**
  * Main public scraper function.
  *
- * courseId: GolfBack UUID for the course
- * slug:     your internal slug, e.g. "windsor_parke"
- * courseName: display name, e.g. "Windsor Parke Golf Club"
- * dateString: "YYYY-MM-DD"
+ * courseId:    GolfBack UUID for the course
+ * slug:        internal slug, e.g. "windsor_parke"
+ * courseName:  display name, e.g. "Windsor Parke Golf Club"
+ * dateString:  "YYYY-MM-DD"
  */
 async function fetchGolfBackTeeTimes(courseId, slug, courseName, dateString) {
   // Default body is empty. If GolfBack requires specific filters (players, holes, time window),

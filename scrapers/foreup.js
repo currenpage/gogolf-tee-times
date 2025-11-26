@@ -63,17 +63,6 @@ const STONO_FERRY_CONFIG = {
   schedule_ids: [3903],
 };
 
-// Dunes West (ForeUp)
-const DUNES_WEST_CONFIG = {
-  slug: "dunes_west",
-  type: "foreup",
-  name: "Dunes West Golf Club",
-  baseUrl: "https://app.foreupsoftware.com/index.php/api/booking/times",
-  booking_class: 1953,
-  schedule_id: 1953,
-  schedule_ids: [1953],
-};
-
 // Jax Beach Golf Club
 const JAX_BEACH_CONFIG = {
   slug: "jax_beach",
@@ -85,17 +74,9 @@ const JAX_BEACH_CONFIG = {
   schedule_ids: [2912],
 };
 
-// Rivertowne (Quick18 – NOT ForeUp, but we include metadata here)
-const RIVERTOWNE_CONFIG = {
-  slug: "rivertowne",
-  type: "quick18",
-  name: "Rivertowne Country Club",
-  baseUrl: "https://rivertowne.quick18.com",
-};
-
 /*
 |--------------------------------------------------------------------------
-| MASTER EXPORT: Course metadata only
+| MASTER EXPORT: ForeUp course metadata only
 |--------------------------------------------------------------------------
 */
 const COURSE_CONFIGS = {
@@ -103,9 +84,7 @@ const COURSE_CONFIGS = {
   charleston_national: CHARLESTON_NATIONAL_CONFIG,
   legend_oaks: LEGEND_OAKS_CONFIG,
   stono_ferry: STONO_FERRY_CONFIG,
-  dunes_west: DUNES_WEST_CONFIG,
   jax_beach: JAX_BEACH_CONFIG,
-  rivertowne: RIVERTOWNE_CONFIG,
 };
 
 /*
@@ -144,7 +123,8 @@ function fetchJson(url) {
         res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
           try {
-            resolve(JSON.parse(data));
+            const parsed = JSON.parse(data);
+            resolve(parsed);
           } catch (err) {
             reject(
               new Error(`Failed to parse JSON from ForeUp: ${err.message}`)
@@ -158,19 +138,57 @@ function fetchJson(url) {
   });
 }
 
+/**
+ * Normalize a single ForeUp tee time into the shared tee time shape.
+ */
 function normalizeForeupTeeTime(raw, courseSlug, courseName) {
-  const time = raw.time || raw.start_time || null;
+  // Time: ForeUp usually provides `time` or `start_time`
+  const time =
+    raw.time ||
+    raw.start_time ||
+    raw.startTime ||
+    raw.tee_time ||
+    raw.teeTime ||
+    null;
 
+  // Price: try 18-hole first, then generic fields
   let price = null;
-  if (typeof raw.green_fee_18 === "number") price = raw.green_fee_18;
-  else if (typeof raw.green_fee === "number") price = raw.green_fee;
-  else if (typeof raw.rate === "number") price = raw.rate;
+  if (typeof raw.green_fee_18 === "number") {
+    price = raw.green_fee_18;
+  } else if (typeof raw.green_fee === "number") {
+    price = raw.green_fee;
+  } else if (typeof raw.rate === "number") {
+    price = raw.rate;
+  } else if (typeof raw.price === "number") {
+    price = raw.price;
+  }
+
+  // Players / capacity
+  const maxPlayers =
+    raw.max_players ??
+    raw.maxPlayers ??
+    raw.players ??
+    null;
 
   let availableSpots = null;
-  if (typeof raw.available_spots_18 === "number")
+  if (typeof raw.available_spots_18 === "number") {
     availableSpots = raw.available_spots_18;
-  else if (typeof raw.available_spots === "number")
+  } else if (typeof raw.available_spots === "number") {
     availableSpots = raw.available_spots;
+  } else if (maxPlayers != null && typeof raw.booked_players === "number") {
+    // Fallback if we know max and booked
+    availableSpots = Math.max(maxPlayers - raw.booked_players, 0);
+  }
+
+  const minPlayers =
+    raw.min_players ??
+    raw.minPlayers ??
+    1;
+
+  const bookingUrl =
+    raw.booking_url ||
+    raw.bookingUrl ||
+    null;
 
   return {
     courseSlug,
@@ -178,10 +196,16 @@ function normalizeForeupTeeTime(raw, courseSlug, courseName) {
     time,
     price,
     availableSpots,
+    minPlayers,
+    maxPlayers,
+    bookingUrl,
     raw,
   };
 }
 
+/**
+ * Fetch and normalize ForeUp tee times for a given course slug + date (YYYY-MM-DD).
+ */
 async function fetchForeUpTimesForCourse(slug, dateString) {
   const config = COURSE_CONFIGS[slug];
 
@@ -194,8 +218,11 @@ async function fetchForeUpTimesForCourse(slug, dateString) {
 
   let arr = raw;
   if (!Array.isArray(arr)) {
-    if (arr && Array.isArray(arr.times)) arr = arr.times;
-    else return [];
+    if (arr && Array.isArray(arr.times)) {
+      arr = arr.times;
+    } else {
+      return [];
+    }
   }
 
   return arr.map((item) =>

@@ -64,6 +64,19 @@ function buildTeeItUpUrl(facilityId, dateString) {
 
 /**
  * Generic TeeitUp fetcher for any course, parameterized by facility + alias + slug/name.
+ *
+ * Normalized output shape:
+ * {
+ *   courseSlug,
+ *   courseName,
+ *   time,            // ISO string, e.g. "2025-11-22T12:10:00.000Z"
+ *   price,           // number or null
+ *   availableSpots,  // number or null
+ *   minPlayers,      // number or null
+ *   maxPlayers,      // number or null
+ *   bookingUrl,      // currently null (can be filled in later)
+ *   raw,             // original TeeitUp tee time object, dayInfo merged in
+ * }
  */
 async function fetchTeeItUpTeeTimesForCourse(dateString, courseConfig) {
   const { facilityId, alias, courseSlug, courseName } = courseConfig;
@@ -81,7 +94,7 @@ async function fetchTeeItUpTeeTimesForCourse(dateString, courseConfig) {
   for (const dayBlock of json) {
     if (Array.isArray(dayBlock.teetimes)) {
       for (const t of dayBlock.teetimes) {
-        // Merge dayInfo into each tee time object.
+        // Merge dayInfo into each tee time object for convenience.
         flattened.push({
           dayInfo: dayBlock.dayInfo,
           ...t,
@@ -101,7 +114,7 @@ async function fetchTeeItUpTeeTimesForCourse(dateString, courseConfig) {
 
     let price = null;
     if (primaryRate) {
-      // TeeitUp uses cents for greenFeeCart, e.g. 5900 → $59.00
+      // TeeitUp often uses cents for green fees, e.g. 5900 → $59.00
       if (typeof primaryRate.greenFeeCart === "number") {
         price = primaryRate.greenFeeCart / 100;
       } else if (typeof primaryRate.greenFee === "number") {
@@ -126,7 +139,7 @@ async function fetchTeeItUpTeeTimesForCourse(dateString, courseConfig) {
     return {
       courseSlug,
       courseName,
-      time: tt.teetime, // ISO string, e.g. "2025-11-22T12:10:00.000Z"
+      time: tt.teetime || tt.teeTime || tt.time || null, // usually ISO string
       price,
       availableSpots,
       minPlayers: tt.minPlayers ?? null,
@@ -151,7 +164,6 @@ async function fetchTeeItUpTeeTimesForSantee(dateString) {
 
 /**
  * Stillwater Golf & Country Club wrapper.
- * facilityId + alias based on what you discovered.
  */
 async function fetchTeeItUpTeeTimesForStillwater(dateString) {
   return fetchTeeItUpTeeTimesForCourse(dateString, {
@@ -162,7 +174,33 @@ async function fetchTeeItUpTeeTimesForStillwater(dateString) {
   });
 }
 
+/**
+ * Hidden Hills Golf Club wrapper.
+ */
+async function fetchTeeItUpTeeTimesForHiddenHills(dateString) {
+  return fetchTeeItUpTeeTimesForCourse(dateString, {
+    facilityId: 15493, // from your URL
+    alias: "hidden-hills-golf-club", // likely pattern - see note below
+    courseSlug: "hidden_hills",
+    courseName: "Hidden Hills Golf Club",
+  });
+}
+
+/**
+ * Blue Cypress Golf Club wrapper.
+ */
+async function fetchTeeItUpTeeTimesForBlueCypress(dateString) {
+  return fetchTeeItUpTeeTimesForCourse(dateString, {
+    facilityId: 4309, // from your URL
+    alias: "blue-cypress-gc-jacksonvilles-premier-9-hole-facility", 
+    courseSlug: "blue_cypress",
+    courseName: "Blue Cypress Golf Club",
+  });
+}
+
 module.exports = {
   fetchTeeItUpTeeTimesForSantee,
   fetchTeeItUpTeeTimesForStillwater,
+  fetchTeeItUpTeeTimesForHiddenHills,
+  fetchTeeItUpTeeTimesForBlueCypress
 };

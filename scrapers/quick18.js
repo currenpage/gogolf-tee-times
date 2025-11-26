@@ -27,7 +27,8 @@ function buildQuick18Url(baseUrl, dateString) {
 }
 
 /**
- * Parse Quick18 encoded time: 202511201212 → "2025-11-20 12:12"
+ * Parse Quick18 encoded time: 202511201212 → "2025-11-20T12:12:00"
+ * Returns an ISO-like local datetime string (no timezone).
  */
 function parseQuick18TimeCode(code) {
   if (!/^\d{12}$/.test(code)) return null;
@@ -36,7 +37,7 @@ function parseQuick18TimeCode(code) {
   const day = code.slice(6, 8);
   const hour = code.slice(8, 10);
   const min = code.slice(10, 12);
-  return `${year}-${month}-${day} ${hour}:${min}`;
+  return `${year}-${month}-${day}T${hour}:${min}:00`;
 }
 
 /**
@@ -45,13 +46,19 @@ function parseQuick18TimeCode(code) {
  */
 async function fetchQuick18TeeTimes(baseUrl, courseSlug, courseName, dateString) {
   const url = buildQuick18Url(baseUrl, dateString);
+  console.log("[Quick18] Fetching URL:", url);
+
   const html = await fetchHtml(url);
+  console.log("[Quick18] HTML snippet:");
+  console.log(html.slice(0, 600)); // first 600 chars for debugging
+
   const $ = cheerio.load(html);
 
   const teeTimes = [];
 
   // Any row that has a rate cell with a "Select" button is a tee-time row.
   const rows = $("tr").has("td.matrixsched a.sexybutton.teebutton");
+  console.log("[Quick18] Found rows with tee buttons:", rows.length);
 
   rows.each((_, row) => {
     const $row = $(row);
@@ -77,16 +84,22 @@ async function fetchQuick18TeeTimes(baseUrl, courseSlug, courseName, dateString)
       return;
     }
 
+    const bookingUrl = link.startsWith("http") ? link : `${baseUrl}${link}`;
+
     teeTimes.push({
       courseSlug,
       courseName,
-      time,
-      price,
-      bookingUrl: `${baseUrl}${link}`,
+      time,               // "YYYY-MM-DD HH:mm"
+      price,              // number or null
+      availableSpots: null, // Quick18 HTML doesn't expose this easily
+      minPlayers: 1,
+      maxPlayers: null,
+      bookingUrl,
       raw: { priceText, link, code },
     });
   });
 
+  console.log("[Quick18] Normalized teeTimes count:", teeTimes.length);
   return teeTimes;
 }
 
