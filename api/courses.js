@@ -29,12 +29,21 @@ const TEEITUP_META = {
   stillwater: {
     name: "Stillwater Golf and Country Club",
   },
+  hidden_hills: {
+    name: "Hidden Hills Golf Club",
+  },
+  blue_cypress; {
+    name: "Blue Cypress Golf Club",
+  },
 };
 
 // GolfBack-backed courses
 const GOLFBACK_META = {
   windsor_parke: {
     name: "Windsor Parke Golf Club",
+  },
+  julington_creek: {
+    name: "Julington Creek Golf Club",
   },
 };
 
