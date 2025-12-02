@@ -32,7 +32,7 @@ const TEEITUP_META = {
   hidden_hills: {
     name: "Hidden Hills Golf Club",
   },
-  blue_cypress; {
+  blue_cypress: {
     name: "Blue Cypress Golf Club",
   },
 };
