@@ -122,6 +122,11 @@ function fetchJson(url) {
 
         res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`HTTP ${res.statusCode} from ForeUp`));
+            return;
+          }
+
           try {
             const parsed = JSON.parse(data);
             resolve(parsed);
@@ -207,27 +212,34 @@ function normalizeForeupTeeTime(raw, courseSlug, courseName) {
  * Fetch and normalize ForeUp tee times for a given course slug + date (YYYY-MM-DD).
  */
 async function fetchForeUpTimesForCourse(slug, dateString) {
-  const config = COURSE_CONFIGS[slug];
+  try {
+    const config = COURSE_CONFIGS[slug];
 
-  if (!config || config.type !== "foreup") {
-    throw new Error(`Requested non-ForeUp course in ForeUp scraper: ${slug}`);
-  }
-
-  const url = buildForeUpUrl(config, dateString);
-  const raw = await fetchJson(url);
-
-  let arr = raw;
-  if (!Array.isArray(arr)) {
-    if (arr && Array.isArray(arr.times)) {
-      arr = arr.times;
-    } else {
-      return [];
+    if (!config || config.type !== "foreup") {
+      throw new Error(`Requested non-ForeUp course in ForeUp scraper: ${slug}`);
     }
-  }
 
-  return arr.map((item) =>
-    normalizeForeupTeeTime(item, slug, config.name)
-  );
+    const url = buildForeUpUrl(config, dateString);
+    const raw = await fetchJson(url);
+
+    // Validate response structure
+    let arr = raw;
+    if (!Array.isArray(arr)) {
+      if (arr && Array.isArray(arr.times)) {
+        arr = arr.times;
+      } else {
+        console.warn(`ForeUp returned non-array response for ${slug}`);
+        return [];
+      }
+    }
+
+    return arr.map((item) =>
+      normalizeForeupTeeTime(item, slug, config.name)
+    );
+  } catch (error) {
+    console.error(`ForeUp scraper error for ${slug}:`, error.message);
+    throw error; // Let executeScraper handle it
+  }
 }
 
 module.exports = {

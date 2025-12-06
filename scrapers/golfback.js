@@ -3,7 +3,7 @@ const https = require("https");
 
 /**
  * Low-level POST helper for GolfBack.
- * You MUST fill in the correct headers/body from a real “Copy as cURL”
+ * You MUST fill in the correct headers/body from a real "Copy as cURL"
  * if the default empty ones do not work.
  *
  * courseId:    GolfBack UUID for the course
@@ -201,45 +201,52 @@ function normalizeGolfBackTeeTimes(rawArray, slug, courseName) {
  * dateString:  "YYYY-MM-DD"
  */
 async function fetchGolfBackTeeTimes(courseId, slug, courseName, dateString) {
-  // Default body is empty. If GolfBack requires specific filters (players, holes, time window),
-  // fill them in here based on Copy-as-cURL.
-  const requestBody = {
-    // Example if needed later:
-    // players: 2,
-    // holes: 18,
-    // startAt: 0,
-    // endAt: 24,
-  };
+  try {
+    // Default body is empty. If GolfBack requires specific filters (players, holes, time window),
+    // fill them in here based on Copy-as-cURL.
+    const requestBody = {
+      // Example if needed later:
+      // players: 2,
+      // holes: 18,
+      // startAt: 0,
+      // endAt: 24,
+    };
 
-  // Default headers are only basic JSON headers. Add auth / origin / referer as needed.
-  const extraHeaders = {
-    // e.g.:
-    // Authorization: "Bearer ...",
-    // Origin: "https://<booking-site>",
-    // Referer: "https://<booking-site>/teetimes",
-  };
+    // Default headers are only basic JSON headers. Add auth / origin / referer as needed.
+    const extraHeaders = {
+      // e.g.:
+      // Authorization: "Bearer ...",
+      // Origin: "https://<booking-site>",
+      // Referer: "https://<booking-site>/teetimes",
+    };
 
-  const json = await postGolfBackJson(
-    courseId,
-    dateString,
-    requestBody,
-    extraHeaders
-  );
+    const json = await postGolfBackJson(
+      courseId,
+      dateString,
+      requestBody,
+      extraHeaders
+    );
 
-  // GolfBack may respond with a raw array or wrapped data.
-  let arr = [];
+    // GolfBack may respond with a raw array or wrapped data.
+    let arr = [];
 
-  if (Array.isArray(json)) {
-    arr = json;
-  } else if (Array.isArray(json.data)) {
-    arr = json.data;
-  } else if (json.data && Array.isArray(json.data.teeTimes)) {
-    arr = json.data.teeTimes;
-  } else if (Array.isArray(json.teeTimes)) {
-    arr = json.teeTimes;
+    if (Array.isArray(json)) {
+      arr = json;
+    } else if (Array.isArray(json.data)) {
+      arr = json.data;
+    } else if (json.data && Array.isArray(json.data.teeTimes)) {
+      arr = json.data.teeTimes;
+    } else if (Array.isArray(json.teeTimes)) {
+      arr = json.teeTimes;
+    } else {
+      console.warn(`GolfBack returned unexpected response structure for ${slug}`);
+    }
+
+    return normalizeGolfBackTeeTimes(arr, slug, courseName);
+  } catch (error) {
+    console.error(`GolfBack scraper error for ${slug}:`, error.message);
+    throw error; // Let executeScraper handle it
   }
-
-  return normalizeGolfBackTeeTimes(arr, slug, courseName);
 }
 
 module.exports = {

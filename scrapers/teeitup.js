@@ -79,75 +79,81 @@ function buildTeeItUpUrl(facilityId, dateString) {
  * }
  */
 async function fetchTeeItUpTeeTimesForCourse(dateString, courseConfig) {
-  const { facilityId, alias, courseSlug, courseName } = courseConfig;
+  try {
+    const { facilityId, alias, courseSlug, courseName } = courseConfig;
 
-  const url = buildTeeItUpUrl(facilityId, dateString);
-  const json = await fetchJson(url, alias);
+    const url = buildTeeItUpUrl(facilityId, dateString);
+    const json = await fetchJson(url, alias);
 
-  // TeeitUp response: array of "day blocks", each with a `teetimes` array.
-  if (!Array.isArray(json)) {
-    return [];
-  }
-
-  // Flatten all teetimes across all day blocks.
-  const flattened = [];
-  for (const dayBlock of json) {
-    if (Array.isArray(dayBlock.teetimes)) {
-      for (const t of dayBlock.teetimes) {
-        // Merge dayInfo into each tee time object for convenience.
-        flattened.push({
-          dayInfo: dayBlock.dayInfo,
-          ...t,
-        });
-      }
+    // TeeitUp response: array of "day blocks", each with a `teetimes` array.
+    if (!Array.isArray(json)) {
+      console.warn(`TeeitUp returned non-array response for ${courseSlug}`);
+      return [];
     }
-  }
 
-  if (flattened.length === 0) {
-    return [];
-  }
-
-  return flattened.map((tt) => {
-    // Take the first rate as the "primary" price.
-    const primaryRate =
-      Array.isArray(tt.rates) && tt.rates.length > 0 ? tt.rates[0] : null;
-
-    let price = null;
-    if (primaryRate) {
-      // TeeitUp often uses cents for green fees, e.g. 5900 → $59.00
-      if (typeof primaryRate.greenFeeCart === "number") {
-        price = primaryRate.greenFeeCart / 100;
-      } else if (typeof primaryRate.greenFee === "number") {
-        price = primaryRate.greenFee / 100;
-      } else if (typeof primaryRate.amount === "number") {
-        price = primaryRate.amount;
-      } else if (typeof primaryRate.price === "number") {
-        price = primaryRate.price;
-      } else if (
-        primaryRate.price &&
-        typeof primaryRate.price.amount === "number"
-      ) {
-        price = primaryRate.price.amount;
+    // Flatten all teetimes across all day blocks.
+    const flattened = [];
+    for (const dayBlock of json) {
+      if (Array.isArray(dayBlock.teetimes)) {
+        for (const t of dayBlock.teetimes) {
+          // Merge dayInfo into each tee time object for convenience.
+          flattened.push({
+            dayInfo: dayBlock.dayInfo,
+            ...t,
+          });
+        }
       }
     }
 
-    const maxPlayers = tt.maxPlayers ?? null;
-    const bookedPlayers = tt.bookedPlayers ?? 0;
-    const availableSpots =
-      maxPlayers != null ? Math.max(maxPlayers - bookedPlayers, 0) : null;
+    if (flattened.length === 0) {
+      return [];
+    }
 
-    return {
-      courseSlug,
-      courseName,
-      time: tt.teetime || tt.teeTime || tt.time || null, // usually ISO string
-      price,
-      availableSpots,
-      minPlayers: tt.minPlayers ?? null,
-      maxPlayers,
-      bookingUrl: null, // can be filled in later if we reverse-engineer their booking URL
-      raw: tt, // full tee-time object (with dayInfo merged in) for debugging
-    };
-  });
+    return flattened.map((tt) => {
+      // Take the first rate as the "primary" price.
+      const primaryRate =
+        Array.isArray(tt.rates) && tt.rates.length > 0 ? tt.rates[0] : null;
+
+      let price = null;
+      if (primaryRate) {
+        // TeeitUp often uses cents for green fees, e.g. 5900 → $59.00
+        if (typeof primaryRate.greenFeeCart === "number") {
+          price = primaryRate.greenFeeCart / 100;
+        } else if (typeof primaryRate.greenFee === "number") {
+          price = primaryRate.greenFee / 100;
+        } else if (typeof primaryRate.amount === "number") {
+          price = primaryRate.amount;
+        } else if (typeof primaryRate.price === "number") {
+          price = primaryRate.price;
+        } else if (
+          primaryRate.price &&
+          typeof primaryRate.price.amount === "number"
+        ) {
+          price = primaryRate.price.amount;
+        }
+      }
+
+      const maxPlayers = tt.maxPlayers ?? null;
+      const bookedPlayers = tt.bookedPlayers ?? 0;
+      const availableSpots =
+        maxPlayers != null ? Math.max(maxPlayers - bookedPlayers, 0) : null;
+
+      return {
+        courseSlug,
+        courseName,
+        time: tt.teetime || tt.teeTime || tt.time || null, // usually ISO string
+        price,
+        availableSpots,
+        minPlayers: tt.minPlayers ?? null,
+        maxPlayers,
+        bookingUrl: null, // can be filled in later if we reverse-engineer their booking URL
+        raw: tt, // full tee-time object (with dayInfo merged in) for debugging
+      };
+    });
+  } catch (error) {
+    console.error(`TeeitUp scraper error for ${courseConfig.courseSlug}:`, error.message);
+    throw error; // Let executeScraper handle it
+  }
 }
 
 /**
@@ -179,8 +185,8 @@ async function fetchTeeItUpTeeTimesForStillwater(dateString) {
  */
 async function fetchTeeItUpTeeTimesForHiddenHills(dateString) {
   return fetchTeeItUpTeeTimesForCourse(dateString, {
-    facilityId: 15493, // from your URL
-    alias: "hidden-hills-golf-club", // likely pattern - see note below
+    facilityId: 15493,
+    alias: "hidden-hills-golf-club",
     courseSlug: "hidden_hills",
     courseName: "Hidden Hills Golf Club",
   });
@@ -191,7 +197,7 @@ async function fetchTeeItUpTeeTimesForHiddenHills(dateString) {
  */
 async function fetchTeeItUpTeeTimesForBlueCypress(dateString) {
   return fetchTeeItUpTeeTimesForCourse(dateString, {
-    facilityId: 4309, // from your URL
+    facilityId: 4309,
     alias: "blue-cypress-gc-jacksonvilles-premier-9-hole-facility", 
     courseSlug: "blue_cypress",
     courseName: "Blue Cypress Golf Club",

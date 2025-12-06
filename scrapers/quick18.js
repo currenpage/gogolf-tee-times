@@ -1,108 +1,212 @@
-// scrapers/quick18.js
-
+// scrapers/teeitup.js
 const https = require("https");
-const cheerio = require("cheerio");
 
 /**
- * Fetch HTML page
+ * Low-level helper to GET JSON with required TeeitUp headers.
  */
-function fetchHtml(url) {
+function fetchJson(url, alias) {
   return new Promise((resolve, reject) => {
     https
-      .get(url, (res) => {
-        let data = "";
-        res.on("data", (chunk) => (data += chunk));
-        res.on("end", () => resolve(data));
-      })
-      .on("error", (err) => reject(err));
+      .get(
+        url,
+        {
+          headers: {
+            "User-Agent": "GoGolf TeeTimes Dev",
+            Accept: "application/json",
+            "x-be-alias": alias, // REQUIRED by TeeitUp
+          },
+        },
+        (res) => {
+          let data = "";
+
+          res.on("data", (chunk) => {
+            data += chunk;
+          });
+
+          res.on("end", () => {
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              return reject(
+                new Error(
+                  `HTTP ${res.statusCode} from TeeitUp: ${data.slice(0, 200)}`
+                )
+              );
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+              resolve(parsed);
+            } catch (err) {
+              reject(
+                new Error(
+                  `JSON parse error: ${err.message}. Body (first 200): ${data.slice(
+                    0,
+                    200
+                  )}`
+                )
+              );
+            }
+          });
+        }
+      )
+      .on("error", (err) => {
+        reject(new Error(`HTTP error calling TeeitUp: ${err.message}`));
+      });
   });
 }
 
 /**
- * Quick18 URLs require YYYYMMDD instead of YYYY-MM-DD
+ * Build the TeeitUp tee-times URL for a facility + date.
+ * dateString must be "YYYY-MM-DD".
  */
-function buildQuick18Url(baseUrl, dateString) {
-  const compact = dateString.replace(/-/g, ""); // "2025-11-20" → "20251120"
-  return `${baseUrl}/teetimes/searchmatrix?teedate=${compact}`;
+function buildTeeItUpUrl(facilityId, dateString) {
+  return `https://phx-api-be-east-1b.kenna.io/v2/tee-times?date=${dateString}&facilityIds=${facilityId}`;
 }
 
 /**
- * Parse Quick18 encoded time: 202511201212 → "2025-11-20T12:12:00"
- * Returns an ISO-like local datetime string (no timezone).
+ * Generic TeeitUp fetcher for any course, parameterized by facility + alias + slug/name.
+ *
+ * Normalized output shape:
+ * {
+ *   courseSlug,
+ *   courseName,
+ *   time,            // ISO string, e.g. "2025-11-22T12:10:00.000Z"
+ *   price,           // number or null
+ *   availableSpots,  // number or null
+ *   minPlayers,      // number or null
+ *   maxPlayers,      // number or null
+ *   bookingUrl,      // currently null (can be filled in later)
+ *   raw,             // original TeeitUp tee time object, dayInfo merged in
+ * }
  */
-function parseQuick18TimeCode(code) {
-  if (!/^\d{12}$/.test(code)) return null;
-  const year = code.slice(0, 4);
-  const month = code.slice(4, 6);
-  const day = code.slice(6, 8);
-  const hour = code.slice(8, 10);
-  const min = code.slice(10, 12);
-  return `${year}-${month}-${day}T${hour}:${min}:00`;
-}
+async function fetchTeeItUpTeeTimesForCourse(dateString, courseConfig) {
+  try {
+    const { facilityId, alias, courseSlug, courseName } = courseConfig;
 
-/**
- * Scrape tee times for a Quick18 course.
- * One entry per tee time, using the first rate cell (Public 18-hole).
- */
-async function fetchQuick18TeeTimes(baseUrl, courseSlug, courseName, dateString) {
-  const url = buildQuick18Url(baseUrl, dateString);
-  console.log("[Quick18] Fetching URL:", url);
+    const url = buildTeeItUpUrl(facilityId, dateString);
+    const json = await fetchJson(url, alias);
 
-  const html = await fetchHtml(url);
-  console.log("[Quick18] HTML snippet:");
-  console.log(html.slice(0, 600)); // first 600 chars for debugging
-
-  const $ = cheerio.load(html);
-
-  const teeTimes = [];
-
-  // Any row that has a rate cell with a "Select" button is a tee-time row.
-  const rows = $("tr").has("td.matrixsched a.sexybutton.teebutton");
-  console.log("[Quick18] Found rows with tee buttons:", rows.length);
-
-  rows.each((_, row) => {
-    const $row = $(row);
-
-    // Take only the first rate cell = Public 18-hole rate
-    const firstRateCell = $row.find("td.matrixsched").first();
-    if (!firstRateCell || firstRateCell.length === 0) {
-      return;
+    // TeeitUp response: array of "day blocks", each with a `teetimes` array.
+    if (!Array.isArray(json)) {
+      console.warn(`TeeitUp returned non-array response for ${courseSlug}`);
+      return [];
     }
 
-    // Price
-    const priceText = firstRateCell.find(".mtrxPrice").text().trim();
-    const numericPrice = priceText.replace(/[^0-9.]/g, "");
-    const price = numericPrice ? parseFloat(numericPrice) : null;
-
-    // Tee time from the encoded code in the link
-    const link = firstRateCell.find("a.sexybutton.teebutton").attr("href") || "";
-    const match = link.match(/\/teetime\/(\d{12})/);
-    const code = match ? match[1] : null;
-    const time = code ? parseQuick18TimeCode(code) : null;
-
-    if (!time) {
-      return;
+    // Flatten all teetimes across all day blocks.
+    const flattened = [];
+    for (const dayBlock of json) {
+      if (Array.isArray(dayBlock.teetimes)) {
+        for (const t of dayBlock.teetimes) {
+          // Merge dayInfo into each tee time object for convenience.
+          flattened.push({
+            dayInfo: dayBlock.dayInfo,
+            ...t,
+          });
+        }
+      }
     }
 
-    const bookingUrl = link.startsWith("http") ? link : `${baseUrl}${link}`;
+    if (flattened.length === 0) {
+      return [];
+    }
 
-    teeTimes.push({
-      courseSlug,
-      courseName,
-      time,               // "YYYY-MM-DD HH:mm"
-      price,              // number or null
-      availableSpots: null, // Quick18 HTML doesn't expose this easily
-      minPlayers: 1,
-      maxPlayers: null,
-      bookingUrl,
-      raw: { priceText, link, code },
+    return flattened.map((tt) => {
+      // Take the first rate as the "primary" price.
+      const primaryRate =
+        Array.isArray(tt.rates) && tt.rates.length > 0 ? tt.rates[0] : null;
+
+      let price = null;
+      if (primaryRate) {
+        // TeeitUp often uses cents for green fees, e.g. 5900 → $59.00
+        if (typeof primaryRate.greenFeeCart === "number") {
+          price = primaryRate.greenFeeCart / 100;
+        } else if (typeof primaryRate.greenFee === "number") {
+          price = primaryRate.greenFee / 100;
+        } else if (typeof primaryRate.amount === "number") {
+          price = primaryRate.amount;
+        } else if (typeof primaryRate.price === "number") {
+          price = primaryRate.price;
+        } else if (
+          primaryRate.price &&
+          typeof primaryRate.price.amount === "number"
+        ) {
+          price = primaryRate.price.amount;
+        }
+      }
+
+      const maxPlayers = tt.maxPlayers ?? null;
+      const bookedPlayers = tt.bookedPlayers ?? 0;
+      const availableSpots =
+        maxPlayers != null ? Math.max(maxPlayers - bookedPlayers, 0) : null;
+
+      return {
+        courseSlug,
+        courseName,
+        time: tt.teetime || tt.teeTime || tt.time || null, // usually ISO string
+        price,
+        availableSpots,
+        minPlayers: tt.minPlayers ?? null,
+        maxPlayers,
+        bookingUrl: null, // can be filled in later if we reverse-engineer their booking URL
+        raw: tt, // full tee-time object (with dayInfo merged in) for debugging
+      };
     });
-  });
+  } catch (error) {
+    console.error(`TeeitUp scraper error for ${courseConfig.courseSlug}:`, error.message);
+    throw error; // Let executeScraper handle it
+  }
+}
 
-  console.log("[Quick18] Normalized teeTimes count:", teeTimes.length);
-  return teeTimes;
+/**
+ * Santee National wrapper.
+ */
+async function fetchTeeItUpTeeTimesForSantee(dateString) {
+  return fetchTeeItUpTeeTimesForCourse(dateString, {
+    facilityId: 5578,
+    alias: "santee-national-golf-club",
+    courseSlug: "santee_national",
+    courseName: "Santee National Golf Club",
+  });
+}
+
+/**
+ * Stillwater Golf & Country Club wrapper.
+ */
+async function fetchTeeItUpTeeTimesForStillwater(dateString) {
+  return fetchTeeItUpTeeTimesForCourse(dateString, {
+    facilityId: 17933,
+    alias: "stillwater-golf-and-country-club",
+    courseSlug: "stillwater",
+    courseName: "Stillwater Golf and Country Club",
+  });
+}
+
+/**
+ * Hidden Hills Golf Club wrapper.
+ */
+async function fetchTeeItUpTeeTimesForHiddenHills(dateString) {
+  return fetchTeeItUpTeeTimesForCourse(dateString, {
+    facilityId: 15493,
+    alias: "hidden-hills-golf-club",
+    courseSlug: "hidden_hills",
+    courseName: "Hidden Hills Golf Club",
+  });
+}
+
+/**
+ * Blue Cypress Golf Club wrapper.
+ */
+async function fetchTeeItUpTeeTimesForBlueCypress(dateString) {
+  return fetchTeeItUpTeeTimesForCourse(dateString, {
+    facilityId: 4309,
+    alias: "blue-cypress-gc-jacksonvilles-premier-9-hole-facility", 
+    courseSlug: "blue_cypress",
+    courseName: "Blue Cypress Golf Club",
+  });
 }
 
 module.exports = {
-  fetchQuick18TeeTimes,
+  fetchTeeItUpTeeTimesForSantee,
+  fetchTeeItUpTeeTimesForStillwater,
+  fetchTeeItUpTeeTimesForHiddenHills,
+  fetchTeeItUpTeeTimesForBlueCypress
 };

@@ -12,6 +12,7 @@ const {
   fetchTeeItUpTeeTimesForBlueCypress,
 } = require("../scrapers/teeitup");
 const { fetchGolfBackTeeTimes } = require("../scrapers/golfback");
+const { executeScraper } = require("../utils/scraper-helpers");
 
 // In-memory cache (per Vercel instance)
 const CACHE = {};
@@ -103,120 +104,185 @@ module.exports = async (req, res) => {
     }
 
     // Check cache
-    let teeTimes = getCached(course, date);
+    const cached = getCached(course, date);
+    if (cached) {
+      res.status(200).json({
+        ...cached,
+        metadata: {
+          ...cached.metadata,
+          cached: true,
+        },
+      });
+      return;
+    }
 
-    if (!teeTimes) {
-      if (course === "all") {
-        // Fetch all ForeUp + all Quick18 + all TeeitUp + all GolfBack courses in parallel
-        const foreupPromises = foreupSlugs.map((slug) =>
-          fetchForeUpTimesForCourse(slug, date)
-        );
+    let teeTimes = [];
+    let errors = [];
+    let totalCourses = 0;
+    let successfulCourses = 0;
 
-        const quick18Promises = quick18Slugs.map((slug) => {
-          const cfg = QUICK18_COURSES[slug];
-          return fetchQuick18TeeTimes(cfg.baseUrl, slug, cfg.name, date);
+    if (course === "all") {
+      // Build scraper tasks for all courses
+      const tasks = [];
+
+      // ForeUp courses
+      foreupSlugs.forEach((slug) => {
+        tasks.push({
+          slug,
+          provider: "foreup",
+          fn: () => fetchForeUpTimesForCourse(slug, date),
         });
+      });
 
-        const teeitupPromises = TEEITUP_SLUGS.map((slug) => {
-          if (slug === "santee_national") {
-            return fetchTeeItUpTeeTimesForSantee(date);
-          }
-          if (slug === "stillwater") {
-            return fetchTeeItUpTeeTimesForStillwater(date);
-          }
-          if (slug === "hidden_hills") {
-            return fetchTeeItUpTeeTimesForHiddenHills(date);
-          }
-          if (slug === "blue_cypress") {
-            return fetchTeeItUpTeeTimesForBlueCypress(date);
-          }
-          return Promise.resolve([]);
+      // Quick18 courses
+      quick18Slugs.forEach((slug) => {
+        const cfg = QUICK18_COURSES[slug];
+        tasks.push({
+          slug,
+          provider: "quick18",
+          fn: () => fetchQuick18TeeTimes(cfg.baseUrl, slug, cfg.name, date),
         });
+      });
 
-        const golfbackPromises = GOLFBACK_SLUGS.map((slug) => {
-          if (slug === "windsor_parke") {
-            return fetchGolfBackTeeTimes(
+      // TeeitUp courses
+      TEEITUP_SLUGS.forEach((slug) => {
+        let fn;
+        if (slug === "santee_national") {
+          fn = () => fetchTeeItUpTeeTimesForSantee(date);
+        } else if (slug === "stillwater") {
+          fn = () => fetchTeeItUpTeeTimesForStillwater(date);
+        } else if (slug === "hidden_hills") {
+          fn = () => fetchTeeItUpTeeTimesForHiddenHills(date);
+        } else if (slug === "blue_cypress") {
+          fn = () => fetchTeeItUpTeeTimesForBlueCypress(date);
+        } else {
+          fn = () => Promise.resolve([]);
+        }
+        
+        tasks.push({
+          slug,
+          provider: "teeitup",
+          fn,
+        });
+      });
+
+      // GolfBack courses
+      GOLFBACK_SLUGS.forEach((slug) => {
+        let fn;
+        if (slug === "windsor_parke") {
+          fn = () =>
+            fetchGolfBackTeeTimes(
               "5a90fb0c-b928-43f0-9486-d5d43c03d25d",
               "windsor_parke",
               "Windsor Parke Golf Club",
               date
             );
-          }
-          if (slug === "julington_creek") {
-            return fetchGolfBackTeeTimes(
-              "e52fc334-4363-4d53-8b13-3b2e60c49087", // Julington Creek courseId
+        } else if (slug === "julington_creek") {
+          fn = () =>
+            fetchGolfBackTeeTimes(
+              "e52fc334-4363-4d53-8b13-3b2e60c49087",
               "julington_creek",
               "Julington Creek Golf Club",
               date
             );
-          }
-          return Promise.resolve([]);
+        } else {
+          fn = () => Promise.resolve([]);
+        }
+        
+        tasks.push({
+          slug,
+          provider: "golfback",
+          fn,
         });
+      });
 
-        const allSlugs = [
-          ...foreupSlugs,
-          ...quick18Slugs,
-          ...TEEITUP_SLUGS,
-          ...GOLFBACK_SLUGS,
-        ];
-        const allPromises = [
-          ...foreupPromises,
-          ...quick18Promises,
-          ...teeitupPromises,
-          ...golfbackPromises,
-        ];
+      totalCourses = tasks.length;
 
-        const results = await Promise.allSettled(allPromises);
+      // Execute all scrapers with timeout + retry + validation
+      const results = await Promise.all(
+        tasks.map((task) =>
+          executeScraper(task.fn, task.slug, task.provider)
+        )
+      );
 
-        teeTimes = [];
-        results.forEach((result, idx) => {
-          const slug = allSlugs[idx];
-          if (result.status === "fulfilled") {
-            teeTimes = teeTimes.concat(result.value);
-          } else {
-            console.error(
-              `Error fetching tee times for ${slug}:`,
-              result.reason
-            );
-          }
-        });
-      } else if (foreupSlugs.includes(course)) {
-        teeTimes = await fetchForeUpTimesForCourse(course, date);
+      // Aggregate results
+      results.forEach((result, idx) => {
+        const task = tasks[idx];
+        
+        if (result.success) {
+          successfulCourses++;
+          teeTimes = teeTimes.concat(result.data);
+        } else {
+          errors.push({
+            course: task.slug,
+            provider: task.provider,
+            error: result.error,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      });
+    } else {
+      // Single course fetch
+      totalCourses = 1;
+      let scraperFn;
+      let provider;
+
+      if (foreupSlugs.includes(course)) {
+        provider = "foreup";
+        scraperFn = () => fetchForeUpTimesForCourse(course, date);
       } else if (quick18Slugs.includes(course)) {
+        provider = "quick18";
         const cfg = QUICK18_COURSES[course];
-        teeTimes = await fetchQuick18TeeTimes(
-          cfg.baseUrl,
-          course,
-          cfg.name,
-          date
-        );
+        scraperFn = () => fetchQuick18TeeTimes(cfg.baseUrl, course, cfg.name, date);
       } else if (course === "santee_national") {
-        teeTimes = await fetchTeeItUpTeeTimesForSantee(date);
+        provider = "teeitup";
+        scraperFn = () => fetchTeeItUpTeeTimesForSantee(date);
       } else if (course === "stillwater") {
-        teeTimes = await fetchTeeItUpTeeTimesForStillwater(date);
+        provider = "teeitup";
+        scraperFn = () => fetchTeeItUpTeeTimesForStillwater(date);
       } else if (course === "hidden_hills") {
-        teeTimes = await fetchTeeItUpTeeTimesForHiddenHills(date);
-      } else if (course === "blue_cypress"){
-        teeTimes = await fetchTeeItUpTeeTimesForBlueCypress(date);
+        provider = "teeitup";
+        scraperFn = () => fetchTeeItUpTeeTimesForHiddenHills(date);
+      } else if (course === "blue_cypress") {
+        provider = "teeitup";
+        scraperFn = () => fetchTeeItUpTeeTimesForBlueCypress(date);
       } else if (course === "windsor_parke") {
-        teeTimes = await fetchGolfBackTeeTimes(
-          "5a90fb0c-b928-43f0-9486-d5d43c03d25d",
-          "windsor_parke",
-          "Windsor Parke Golf Club",
-          date
-        );
+        provider = "golfback";
+        scraperFn = () =>
+          fetchGolfBackTeeTimes(
+            "5a90fb0c-b928-43f0-9486-d5d43c03d25d",
+            "windsor_parke",
+            "Windsor Parke Golf Club",
+            date
+          );
       } else if (course === "julington_creek") {
-        teeTimes = await fetchGolfBackTeeTimes(
-          "e52fc334-4363-4d53-8b13-3b2e60c49087",
-          "julington_creek",
-          "Julington Creek Golf Club",
-          date
-        );
+        provider = "golfback";
+        scraperFn = () =>
+          fetchGolfBackTeeTimes(
+            "e52fc334-4363-4d53-8b13-3b2e60c49087",
+            "julington_creek",
+            "Julington Creek Golf Club",
+            date
+          );
       } else {
         teeTimes = [];
       }
 
-      storeCached(course, date, teeTimes);
+      if (scraperFn) {
+        const result = await executeScraper(scraperFn, course, provider);
+        
+        if (result.success) {
+          successfulCourses = 1;
+          teeTimes = result.data;
+        } else {
+          errors.push({
+            course,
+            provider,
+            error: result.error,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
     }
 
     // Build course metadata for response
@@ -241,7 +307,7 @@ module.exports = async (req, res) => {
       courseMeta = {
         slug: "hidden_hills",
         name: "Hidden Hills Golf Club",
-      };  
+      };
     } else if (course === "blue_cypress") {
       courseMeta = {
         slug: "blue_cypress",
@@ -261,11 +327,23 @@ module.exports = async (req, res) => {
       courseMeta = { slug: course, name: course };
     }
 
-    res.status(200).json({
+    const responseData = {
       course: courseMeta,
       date,
       teeTimes,
-    });
+      metadata: {
+        totalCourses,
+        successfulCourses,
+        failedCourses: totalCourses - successfulCourses,
+        cached: false,
+        errors: errors.length > 0 ? errors : undefined,
+      },
+    };
+
+    // Store in cache
+    storeCached(course, date, responseData);
+
+    res.status(200).json(responseData);
   } catch (err) {
     console.error("Error in /api/tee-times handler:", err);
     res.status(500).json({ error: "Internal server error" });
